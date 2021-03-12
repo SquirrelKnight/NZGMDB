@@ -39,6 +39,7 @@ Previous Version Information:
 
 
 Earthquake Source Table:
+
 	evid | Event identification number.
 	datetime | Origin time of the event.
 	lat, lon, depth | Origin latitude and longitude of the event in decimal degrees, with 
@@ -56,6 +57,7 @@ Earthquake Source Table:
 	relocated | Whether the associated event has been relocated (yes or no).
 
 Site Table:
+
 	net, sta | Network and station name.
 	lat, lon | Station latitude and longitude coordinate in decimal degrees.
 	elev | Station elevation, in meters above sea level.
@@ -70,6 +72,7 @@ Site Table:
 	Q_Z1.0 | Quality rating of Z1.0 measurement (see Kaiser et al. (2017))
 
 Station Magnitude Table:
+
 	magid | Magnitude identification number.
 	net, sta, z_chan, e_chan, n_chan | Network, station, and 3-component channels used to 
 		determine magnitude.
@@ -84,12 +87,14 @@ Station Magnitude Table:
 	relocated | Whether the associated event has been relocated (yes or no).
 
 Phase Arrival Table:
+
 	arid | Arrival identification number.
 	datetime | Time of phase arrival.
 	net, sta, chan | Seismic network, station, and channel where the arrival was detected.
 	phase | Phase of the arrival (e.g., P- or S-phases).
 
 Propagation Path Table:
+
 	evid | Event identification number.
 	net, sta | Network and station name.
 	r_epi, r_hyp | Epicentral and hypocentral distances between station and event (km).
@@ -102,7 +107,8 @@ Propagation Path Table:
 		shortest distance to the surface projection of a rupture plane (in km). These are 
 		roughly equivalent to r_hyp and r_epi, respectively.
 
-Ground Motion Intensity Measure Catalogue:		
+Ground Motion Intensity Measure Catalogue:
+
 	gmid | Ground motion identification number.
 	evid | Event identification number.
 	net, sta, loc | Network, location (number associated to different instruments at a site/station), and station name.
