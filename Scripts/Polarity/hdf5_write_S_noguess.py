@@ -34,13 +34,12 @@ import glob
 import h5py
 from pandarallel import pandarallel		# conda install -c bjrn pandarallel
 import shutil
+import ray
 
 def mseed_write(row):
 
-	root = '/Volumes/SeaJade 2 Backup/NZ/hdf5_kaikoura'
+	root = '/Volumes/SeaJade 2 Backup/NZ/hdf5'
 
-	channel_codes = 'HNZ,BNZ,HHZ,BHZ,EHZ,SHZ'
-	s_channel_codes = 'HN?,BN?,HH?,BH?,EH?,SH?'
 	sorter = ['HHZ','BHZ','EHZ','HNZ','BNZ','SHZ']
 	sorterIndex = dict(zip(sorter, range(len(sorter))))
 	s_sorter = ['HH','BH','EH','HN','BN','SH']
@@ -58,24 +57,6 @@ def mseed_write(row):
 # 		if row.eventtype == 'outside of network interest':
 # 			print('Event '+eventid+' outside of network interest')
 
-	otime = event.preferred_origin().time
-	event_lat = event.preferred_origin().latitude
-	event_lon = event.preferred_origin().longitude
-	event_depth = event.preferred_origin().depth/1000 # Depth in km
-	folderA = otime.strftime('%Y')
-	folderB = otime.strftime('%m_%b')
-	folderC = otime.strftime('%Y-%m-%d_%H%M%S')
-	directory = root+'/'+folderA+'/'+folderB+'/'+folderC
-	hdf5_directory = root+'/'+folderA+'/'+folderB+'/'+folderC+'/hdf5/data'
-	filename = otime.strftime(str(eventid)+'.xml') # should XML file be identified by the event id?
-	fw = directory+'/'+filename
-	if not os.path.exists(directory):
-		os.makedirs(directory)
-# 		print('Event',eventid,'created')
-	else: # Skip events where the directory already exists
-		return
-	event.write(fw,format='QUAKEML')
-	preferred_magnitude = event.preferred_magnitude().mag
 	p_stations = []
 	s_stations = []
 	for pick in event.picks: 
@@ -85,6 +66,31 @@ def mseed_write(row):
 			s_stations.append([pick.waveform_id.network_code,pick.waveform_id.station_code,pick.time])
 	p_sta_df = pd.DataFrame(p_stations,columns=['net','sta','arr_time']).drop_duplicates(subset=['net','sta'])
 	s_sta_df = pd.DataFrame(s_stations,columns=['net','sta','arr_time']).drop_duplicates(subset=['net','sta'])
+	
+	if len(p_sta_df) < 8: # Require at least 8 p-phases for focal mechanism computations
+		print('Not enough p-phases for event '+str(eventid))
+		return
+
+	otime = event.preferred_origin().time
+	event_lat = event.preferred_origin().latitude
+	event_lon = event.preferred_origin().longitude
+	event_depth = event.preferred_origin().depth/1000 # Depth in km
+	
+	folderA = otime.strftime('%Y')
+	folderB = otime.strftime('%m_%b')
+	folderC = otime.strftime('%Y-%m-%d_%H%M%S')
+	directory = root+'/'+folderA+'/'+folderB+'/'+folderC
+	hdf5_directory = root+'/'+folderA+'/'+folderB+'/'+folderC+'/hdf5/data'
+	filename = otime.strftime(str(eventid)+'.xml') # should XML file be identified by the event id?
+	fw = directory+'/'+filename
+	if not os.path.exists(directory):
+		os.makedirs(directory)
+		print('Event',eventid,'created')
+	else: # Skip events where the directory already exists
+		return
+	event.write(fw,format='QUAKEML')
+	
+	preferred_magnitude = event.preferred_magnitude().mag
 	
 	data_matrix = []
 	sncls_matrix = []
@@ -318,7 +324,7 @@ def mseed_write(row):
 	
 		except FDSNNoDataException:
 # 				print('No data',sta)
-			continue
+			continueipyt
 		except ObsPyMSEEDFilesizeTooSmallError:
 # 				print('File size too small',sta)
 			continue
@@ -363,11 +369,27 @@ inventory_NZ = client_NZ.get_stations(channel=channel_codes)
 inventory_IU = client_IU.get_stations(network='IU',station='SNZO',channel=channel_codes)
 inventory = inventory_NZ+inventory_IU
 
-kaikoura_events = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/Scripts/Polarity/kaikoura_polarities.csv',low_memory=False)
-event_ids = pd.DataFrame(kaikoura_events.evid.unique(),columns=['evid'])
+filename = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/earthquakes-7.csv'
+geonet = pd.read_csv(filename,low_memory=False)
+geonet = geonet.sort_values('origintime')
+geonet['origintime'] = pd.to_datetime(geonet['origintime'],format='%Y-%m-%dT%H:%M:%S.%fZ')
+geonet = geonet.reset_index(drop=True)
+
+# kaikoura_events = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/Scripts/Polarity/kaikoura_polarities.csv',low_memory=False)
+# event_ids = pd.DataFrame(kaikoura_events.evid.unique(),columns=['evid'])
+
+min_date = np.datetime64('2018-01-01').astype('datetime64[D]').astype(int)+1970
+max_date = np.datetime64('2022-01-01').astype('datetime64[D]').astype(int)+1970
+geonet_sub_mask = (geonet.origintime.values.astype('datetime64[D]').astype(int)+1970 >= min_date) & (geonet.origintime.values.astype('datetime64[D]').astype(int)+1970 < max_date)
+geonet_sub = geonet[geonet_sub_mask].reset_index(drop=True)
+event_ids = pd.DataFrame(geonet_sub.publicid.unique(),columns=['evid'])
 
 start_time = time.time()
-pandarallel.initialize(nb_workers=8,progress_bar=True) # Customize the number of parallel workers
-event_ids.parallel_apply(lambda x: mseed_write(x),axis=1)
+ray.init()
+mseed_write_r = ray.remote(mseed_write)
+result_ids = [mseed_write_r.remote(row) for idx,row in event_ids.iterrows()]
+results = ray.get(result_ids)
+ray.shutdown()
 end_time = time.time()-start_time
 print('Took '+str(end_time)+' seconds to run')
+

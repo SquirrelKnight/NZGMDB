@@ -6,6 +6,7 @@ import glob
 from obspy.clients.fdsn import Client as FDSN_Client
 import obspy as op
 import ray
+import os
 
 ### Check for mb values
 def check_mb(df,client_NZ):
@@ -95,7 +96,7 @@ def fix_mag(df,sta_mag_out):
 #     for ev_idx,row in event_df.iterrows():
     row = df.copy()
 #     print(row.evid,row.name)
-    if row.mag_type[0:2].lower() != 'mw':
+    if row.mag_type.lower() == 'cml' or row.mag_type.lower() == 'cml_h':
         evid = row.evid
     #     print(evid)
 #         cat = client_NZ.get_events(eventid=evid)
@@ -131,8 +132,8 @@ def fix_mag(df,sta_mag_out):
 
         IQR_mags = mag_data[~((mag_data.mag_corr < lowqe_bound) |(mag_data.mag_corr > upper_bound))]
         # Filter out stations with an extremely high or low magnitude
-        if len(IQR_mags.sta.unique()) <= 3:
-            IQR_mags = IQR_mags[(IQR_mags.mag_corr <= row.mag_orig + 2) & (IQR_mags.mag_corr >= row.mag_orig - 2)]
+#         if len(IQR_mags.sta.unique()) <= 3:
+        IQR_mags = IQR_mags[(IQR_mags.mag_corr <= row.mag_orig + 2) & (IQR_mags.mag_corr >= row.mag_orig - 2)]
 
     #     new_mag_data = mag_data[(mag_data.mag_corr >= mean - (2 * std)) & (mag_data.mag_corr <= mean + (2 * std))]
         new_mean = IQR_mags.mag_corr.mean()
@@ -150,7 +151,10 @@ def fix_mag(df,sta_mag_out):
 #     if new_mean != mean:
 #         print('Revised!')
 event_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/earthquake_source_table_complete.csv',low_memory=False)
-sta_mag_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/station_magnitude_table_relocated.csv',low_memory=False)
+sta_mag_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/station_magnitude_table.csv',low_memory=False)
+out_dir = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/corrected/'
+if not os.path.exists(out_dir):
+    os.makedirs(out_dir)
 
 client_NZ = FDSN_Client("GEONET")
 client_IU = FDSN_Client('IRIS')
@@ -164,11 +168,11 @@ for network in inventory:
 		station_info.append([network.code, station.code, station.latitude, station.longitude, station.elevation])
 sta_df = pd.DataFrame(station_info,columns=['net','sta','lat','lon','elev'])
 sta_df = sta_df.drop_duplicates().reset_index(drop=True)
-sta_corr = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/sta_corr_new.csv')
+sta_corr = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/sta_corr.csv')
 
 nz20_res = 0.278
 
-years = np.arange(2000,2008)
+years = np.arange(2000,2022)
 # months = np.arange(1,13)
 # years = np.unique(geonet.origintime.values.astype('datetime64[Y]').astype(int)+1970)
 for year in years:
@@ -184,15 +188,16 @@ for year in years:
     
     results = event_sub.parallel_apply(lambda x: revise_magnitudes(x,sta_mag_df_sub,sta_df,sta_corr),axis=1)
     sta_mag_out = pd.concat([result for result in results]).reset_index(drop=True)
-    sta_mag_out.to_csv('sta_mag_fix_'+str(process_year)+'.csv',index=False)
+    sta_mag_out.to_csv(out_dir+'sta_mag_fix_'+str(process_year)+'.csv',index=False)
     
     event_out = event_sub.parallel_apply(lambda x: fix_mag(x,sta_mag_out),axis=1)  
-    event_out.to_csv('event_mag_fix_'+str(process_year)+'.csv',index=False)
+#     event_out = event_sub.parallel_apply(lambda x: fix_mag(x,sta_mag_df_sub),axis=1)  
+    event_out.to_csv(out_dir+'event_mag_fix_'+str(process_year)+'.csv',index=False)
     
-events_final = pd.concat([pd.read_csv(f,low_memory=False) for f in glob.glob('event_mag_fix_*.csv')])
-sta_mag_final = pd.concat([pd.read_csv(f,low_memory=False) for f in glob.glob('sta_mag_fix_*.csv')])
-events_final.to_csv('earthquake_source_table_fixed_mags.csv',index=False)
-sta_mag_final.to_csv('station_magnitude_table_fixed_mags.csv',index=False)
+events_final = pd.concat([pd.read_csv(f,low_memory=False) for f in glob.glob(out_dir+'event_mag_fix_*.csv')])
+events_final.to_csv(out_dir+'earthquake_source_table_fixed_mags.csv',index=False)
+sta_mag_final = pd.concat([pd.read_csv(f,low_memory=False) for f in glob.glob(out_dir+'sta_mag_fix_*.csv')])
+sta_mag_final.to_csv(out_dir+'station_magnitude_table_fixed_mags.csv',index=False)
 
 
 
@@ -201,7 +206,7 @@ sta_mag_final.to_csv('station_magnitude_table_fixed_mags.csv',index=False)
 
 
 
-years = np.arange(2000,2012)
+years = np.arange(2000,2001)
 # months = np.arange(1,13)
 # years = np.unique(geonet.origintime.values.astype('datetime64[Y]').astype(int)+1970)
 for year in years:
@@ -218,3 +223,37 @@ for year in years:
     
 events_final = pd.concat([pd.read_csv(f,low_memory=False) for f in glob.glob('event_M_fix_*.csv')])
 events_final.to_csv('earthquake_source_table_fixed_M.csv',index=False)
+
+
+# The below section is just for some comparison figures with Annemarie's DB
+init_events_sub = event_df[event_df.mag_type == 'cMl']
+init_events_sub.sort_values('datetime',inplace=True)
+init_events_sub.reset_index(drop=True,inplace=True)
+final_events_sub = events_final[events_final.mag_type == 'cMl']
+final_events_sub.sort_values('datetime',inplace=True)
+final_events_sub.reset_index(drop=True,inplace=True)
+final_events_sub['evid'] = final_events_sub.evid.astype('str')
+am_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/Cat_NSHM_magnitudes-revised_June22.csv',low_memory=False)
+merged_df = final_events_sub.merge(am_df,left_on='evid',right_on='publicid')
+merged_df['datetime'] = pd.to_datetime(merged_df.datetime,utc=True)
+merged_df = merged_df[(merged_df.Mpref >= 3.49) & (merged_df.tect_class == 'Crustal')]
+other_merged_df = init_events_sub.merge(am_df,left_on='evid',right_on='publicid')
+other_merged_df['datetime'] = pd.to_datetime(other_merged_df.datetime,utc=True)
+other_merged_df = other_merged_df[(other_merged_df.Mpref >= 3.49) & (other_merged_df.tect_class == 'Crustal')]
+
+import matplotlib.pyplot as plt
+
+plt.scatter(final_events_sub.mag, init_events_sub.mag,edgecolors='black')
+plt.xlabel('Revised cMl')
+plt.ylabel('Initial cMl')
+plt.show()
+
+plt.scatter(other_merged_df.mag, other_merged_df.Mpref,edgecolors='black')
+plt.scatter(merged_df.mag, merged_df.Mpref,edgecolors='black')
+ax = plt.gca()
+ax.legend(['Initial cMl','Revised cMl'])
+plt.xlabel('cMl')
+plt.xlim(3,6.5)
+plt.ylim(3,6.5)
+plt.ylabel('Annemarie MLNZ20')
+plt.show()

@@ -94,7 +94,7 @@ basin_outlines = {
     "2.07": v207_basin_list,
 }
 
-stat_file = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/site_table_response.csv',low_memory=False)
+stat_file = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/testaroo/site_table_response.csv',low_memory=False)
 # stat_file['basin'] = None
 paths = []
 for outline_fp in v207_basin_list:
@@ -124,7 +124,7 @@ stat_file.loc[stat_file.basin == 'SpringsJ','basin'] = 'Springs Junction'
 stat_file.loc[stat_file.basin == 'CollingwoodBasinOutline','basin'] = 'Collingwood'
 stat_file.loc[stat_file.basin == 'GreaterWellington4','basin'] = 'Greater Wellington'
 
-stat_file.to_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/site_table_basin.csv',index=False)
+stat_file.to_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/testaroo/site_table_basin.csv',index=False)
 
 #         else:
 #             print(stat.lon, stat.lat, stat.sta, False, None)

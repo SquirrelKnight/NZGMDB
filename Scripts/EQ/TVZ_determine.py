@@ -150,10 +150,10 @@ def TVZ_path_plot(df,taupo_polygon,df_eq,tect_domain_points,wgs2nztm):
     fig.plot(x=path_lon,y=path_lat,pen='1p,blue')
     if line.intersection(taupo_polygon):
         fig.plot(x=tvz_path_lon,y=tvz_path_lat,pen='1p,red')
-    fig.plot(ev_lon,ev_lat,color='white',style='c0.4c',pen='1p')
-    fig.text(x=ev_lon,y=ev_lat,text=event_id,offset='0.5c')
-    fig.plot(sta_lon,sta_lat,color='pink',style='t0.4c',pen='1p')
-    fig.text(x=sta_lon,y=sta_lat,text=sta_id,offset='0.5c')
+    fig.plot(path_lon[0],path_lat[0],color='white',style='c0.4c',pen='1p')
+    fig.text(x=path_lon[0],y=path_lat[0],text=event_id,offset='0.5c')
+    fig.plot(path_lon[1],path_lat[1],color='pink',style='t0.4c',pen='1p')
+    fig.text(x=path_lon[1],y=path_lat[1],text=sta_id,offset='0.5c')
     fig.show(method="external")
 
 

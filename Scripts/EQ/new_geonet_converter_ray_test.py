@@ -18,6 +18,40 @@ import math
 import ray
 import time as timeit
 
+def glitch_catcher(
+    tr: Trace, 
+    window_length: float, 
+    threshold: float
+):
+    """
+    Catch glitches - returns True if a glitch is found.
+
+    Parameters
+    ---
+    tr:
+        Trace to look for glitches in
+    window_length:
+        Window length to compute average differences over in seconds
+    threshold:
+        Threshold multiplier of average differences to declare a glitch
+    """
+
+    window_length = int(window_length * tr.stats.sampling_rate)
+    # Using a window length to try and avoid removing earthquake signals...
+
+    diffs = np.abs(tr.data[0:-1] - tr.data[1:])
+    diff_moving = np.cumsum(diffs)
+    diff_moving = diff_moving[window_length:] - diff_moving[0:-window_length:]
+    diff_moving  = diff_moving / window_length
+    # Extend diff_moving to the same length as diffs - not a great way to do this!
+    diff_moving = np.concatenate(
+        [np.array([diff_moving.mean()] * (len(diffs) - len(diff_moving))), 
+         diff_moving])
+    if np.any(diffs > diff_moving * threshold):
+        print(f"Found large differences at {np.where(diffs > diff_moving * threshold)}")
+        return True
+    return False
+
 def _rms(array):
     """
     Calculate RMS of array.
@@ -217,8 +251,10 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 	corners = 4
 	velocity = False
 
-	sorter = ['HH','BH','EH','HN','BN','SH']
-	channel_filter = 'HH?,BH?,EH?,HN?,BN?,SH?'
+	sorter = ['HN','BN','HH','BH','EH','SH']
+	channel_filter = 'HN?,BN?,HH?,BH?,EH?,SH?'
+# 	sorter = ['HH','BH','EH','HN','BN','SH']
+# 	channel_filter = 'HH?,BH?,EH?,HN?,BN?,SH?'
 	nz20_res = 0.278 # Uncertainty of the Rhoades et al. (2020) method.
 	reloc = 'no' # Indicates if an earthquake has been relocated, default to 'no'.
 	eventid = str(eventid)
@@ -256,21 +292,49 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 				std = event.preferred_origin().quality.standard_error
 			except:
 				std = None
-		
+	
 			# Find magnitude info, deprioritize 'M' measurements
 			pref_mag_type = event.preferred_magnitude().magnitude_type
 			if pref_mag_type.lower() == 'm':
 				pref_mag_type = 'ML'
 				mb_mag = [mag for mag in event.magnitudes if mag.magnitude_type.lower() == 'mb']
 				if mb_mag:
-					loc_mag = mb_mag[0]
-					pref_mag_type = 'Mb'
+					mb_mag = mb_mag[np.array([mb_mag.station_count for mb_mag in mb_mag]).argmax()]
+				ml_loc_mag = [mag for mag in event.magnitudes if mag.magnitude_type.lower() == 'ml']
+				if ml_loc_mag:
+					ml_loc_mag = ml_loc_mag[np.array([ml_loc_mag.station_count for ml_loc_mag in ml_loc_mag]).argmax()]
+				mlv_loc_mag = [mag for mag in event.magnitudes if mag.magnitude_type.lower() == 'mlv']
+				if mlv_loc_mag:
+					mlv_loc_mag = mlv_loc_mag[np.array([mlv_loc_mag.station_count for mlv_loc_mag in mlv_loc_mag]).argmax()]
+				if mb_mag:
+					# For events with few Mb measures, perform some checks.
+					if mb_mag.station_count < 3:
+						loc_mag = []
+						if ml_loc_mag and mlv_loc_mag:
+							ml_loc_mag = ml_loc_mag
+							mlv_loc_mag = mlv_loc_mag
+							if ml_loc_mag.station_count >= mlv_loc_mag.station_count:
+								loc_mag = ml_loc_mag
+							else:
+								loc_mag = mlv_loc_mag
+						elif ml_loc_mag:
+							loc_mag = ml_loc_mag
+						elif mlv_loc_mag:
+							loc_mag = mlv_loc_mag
+						if len(loc_mag) > 0:
+							if loc_mag.station_count > mb_mag.station_count:
+								loc_mag = loc_mag
+								print(eventid+ 'mb count: '+str(mb_mag.station_count)+' ml count: '+str(loc_mag.station_count))
+						else:
+							loc_mag = mb_mag
+							pref_mag_type = 'Mb'
+					else:
+						loc_mag = mb_mag
+						pref_mag_type = 'Mb'
 				else:
-					ml_loc_mag = [mag for mag in event.magnitudes if mag.magnitude_type.lower() == 'ml']
-					mlv_loc_mag = [mag for mag in event.magnitudes if mag.magnitude_type.lower() == 'mlv']
 					if ml_loc_mag and mlv_loc_mag:
-						ml_loc_mag = ml_loc_mag[0]
-						mlv_loc_mag = mlv_loc_mag[0]
+						ml_loc_mag = ml_loc_mag
+						mlv_loc_mag = mlv_loc_mag
 						# Always prefer vertical over horizontal magnitudes
 	# 						loc_mag = mlv_loc_mag
 						# Always take value with higher station count
@@ -279,9 +343,9 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 						else:
 							loc_mag = mlv_loc_mag
 					elif ml_loc_mag:
-						loc_mag = ml_loc_mag[0]
+						loc_mag = ml_loc_mag
 					elif mlv_loc_mag:
-						loc_mag = mlv_loc_mag[0]
+						loc_mag = mlv_loc_mag
 	# 					else:
 	# 						print('...No ML for',eventid,'trying MLv')
 	# 						loc_mag = [mag for mag in event.magnitudes if mag.magnitude_type.lower() == 'mlv']
@@ -328,12 +392,12 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 				sta = pick.sta
 				loc = pick['loc']
 				chan = pick.chan
-				
+			
 				if net == 'NZ':
 					client = client_NZ
 				else:
 					client = client_IU
-							
+						
 				ns = [net,sta]
 				row_exists = [row[1:3] for row in sta_mag_line if row[1:3] == ns]
 				if row_exists:
@@ -390,7 +454,7 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 						corr = sta_corr[sta_corr.sta == sta]['corr'].values[0]
 					else:
 						corr = 0
-					
+				
 					if len(sta_info) > 0:
 						dist, az, b_az = op.geodetics.gps2dist_azimuth(ev_lat, ev_lon, sta_info['lat'].values[0], sta_info['lon'].values[0])
 						r_epi = dist/1000
@@ -402,7 +466,7 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 
 					slow_vel = 3
 					endtime = ev_datetime + r_hyp/slow_vel + 30
-				
+			
 					if pick.phase_hint.lower()[0] == 'p':
 						windowStart = pick.time - 35
 						windowEnd = endtime
@@ -426,10 +490,10 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 							st = st.merge()
 						except:
 							continue
-	
+
 					for tr in st:
 						filt_data = False
-						
+					
 						sta_mag = []
 						for sta_mag_search in event.station_magnitudes:
 							if sta_mag_search.waveform_id.station_code == sta:
@@ -438,12 +502,12 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 										sta_mag = sta_mag_search
 										break
 								elif tr.stats.channel[2] != 'Z': # For 2012 + data, horizontal channels are combined
-# 									if sta_mag_search.waveform_id.channel_code == tr.stats.channel[0:2]:
+	# 									if sta_mag_search.waveform_id.channel_code == tr.stats.channel[0:2]:
 									sta_mag = sta_mag_search
 									break
-# 						sta_mag = [sta_mag for sta_mag in event.station_magnitudes if ((sta_mag.waveform_id.station_code == sta) & (sta_mag.waveform_id.channel_code[2] == tr.stats.channel[2]))]
+	# 						sta_mag = [sta_mag for sta_mag in event.station_magnitudes if ((sta_mag.waveform_id.station_code == sta) & (sta_mag.waveform_id.channel_code[2] == tr.stats.channel[2]))]
 						if sta_mag:
-# 							sta_mag = sta_mag[0]
+	# 							sta_mag = sta_mag[0]
 							sta_mag_mag = sta_mag.mag
 							sta_mag_type = sta_mag.station_magnitude_type
 							amp = [amp for amp in event.amplitudes if amp.resource_id == sta_mag.amplitude_id]
@@ -466,7 +530,7 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 
 						tr_starttime = tr.stats.starttime
 						tr_endtime = tr.stats.endtime
-# 						tr.taper(0.05)
+	# 						tr.taper(0.05)
 						tr.trim(tr.stats.starttime-5,tr.stats.endtime,pad=True,fill_value=tr.data[0])
 						tr.trim(tr.stats.starttime,tr.stats.endtime+5,pad=True,fill_value=tr.data[-1])
 	# 					
@@ -479,24 +543,24 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 								mag_line.append([magid, net, sta, loc, tr.stats.channel, eventid, sta_mag_mag, sta_mag_type, None, 'uncorrected', amp_amp, None, None, None,amp_unit])
 								sta_mag_line.append([magid, net, sta, loc, tr.stats.channel, eventid, sta_mag_mag, sta_mag_type, None, 'uncorrected', amp_amp, None, None, None,amp_unit])
 							continue
-						
+					
 						# Test if Nyquist frequency is lower than highpass filter
-# 						if tr.stats.sampling_rate/2 < lowcut:
-# 							print(f'Sampling rate for {tr.id} too low')
-# 							magid = eventid+str('m')+str(i)
-# 							i = i+1
-# 							mag_line.append([magid, net, sta, loc, tr.stats.channel, eventid, sta_mag_mag, sta_mag_type, None, 'uncorrected', amp_amp, None, None, None])
-# 							sta_mag_line.append([magid, net, sta, loc, tr.stats.channel, eventid, sta_mag_mag, sta_mag_type, None, 'uncorrected', amp_amp, None, None, None])
-# 							continue
-						
-# 						tr.filter('highpass', freq=lowcut,
-# 							corners = corners)
+	# 						if tr.stats.sampling_rate/2 < lowcut:
+	# 							print(f'Sampling rate for {tr.id} too low')
+	# 							magid = eventid+str('m')+str(i)
+	# 							i = i+1
+	# 							mag_line.append([magid, net, sta, loc, tr.stats.channel, eventid, sta_mag_mag, sta_mag_type, None, 'uncorrected', amp_amp, None, None, None])
+	# 							sta_mag_line.append([magid, net, sta, loc, tr.stats.channel, eventid, sta_mag_mag, sta_mag_type, None, 'uncorrected', amp_amp, None, None, None])
+	# 							continue
+					
+	# 						tr.filter('highpass', freq=lowcut,
+	# 							corners = corners)
 						# Will zero phase filtering make a difference?
-# 						tr.filter('highpass', freq=lowcut,
-# 							corners = corners / 2, zerophase = True)
+	# 						tr.filter('highpass', freq=lowcut,
+	# 							corners = corners / 2, zerophase = True)
 
 						tr = _sim_WA(tr, inventory_st, 0, velocity=False)
-				
+			
 						# Check if there is no data, or if the trace is all 0s
 						if tr == None or tr.max() == 0:
 							if sta_mag:
@@ -506,9 +570,9 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 								sta_mag_line.append([magid, net, sta, loc, tr.stats.channel, eventid, sta_mag_mag, sta_mag_type, None, 'uncorrected', amp_amp, None, None, None,amp_unit])
 							continue
 
-						
+					
 						trim_tr = tr.copy().trim(tr_starttime,tr_endtime)
-		
+	
 						# Test SNR in noise window, if available, else use alternative SNR calc
 						if len(trim_tr.slice(starttime=noise_window[0], endtime=noise_window[1]).data) > 0:
 							snr = _snr(trim_tr,noise_window,signal_window)
@@ -517,7 +581,7 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 						if snr < 3:
 							# Not a high enough SNR
 							print(f'SNR for {tr.id} not high enough, attempting to filter data')
-	  
+  
 							tr.filter('highpass', freq=lowcut,
 								corners = corners, zerophase=True)
 							trim_tr = tr.copy().trim(tr_starttime,tr_endtime)
@@ -530,14 +594,14 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 							else:
 								print(f'SNR for {tr.id} is still not high enough')
 								continue
-							
+						
 						tr.trim(tr_starttime,tr_endtime)		
 
 						# Calculate the normalized noise amplitude
 						amplitude, period, delay, peak, trough = _max_p2t(
 							tr.data, tr.stats.delta, return_peak_trough=True)
 	# 						print(amplitude,peak,trough)
-											
+										
 						if peak >= abs(trough):
 							amplitude = peak
 						else:
@@ -545,8 +609,8 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 	# 						
 	# 						# Calculate the absolute amplitude
 						max_amplitude = abs(tr.max())
-					
 				
+			
 						# Generate poles and zeros for the filter we used earlier.
 						# We need to get the gain for the digital SOS filter used by
 						# obspy.
@@ -572,10 +636,10 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 						trough *= 1000
 						max_amplitude *= 1000
 	# 						print(amplitude,amp_amp,amp_time,windowStart+delay,r_hyp,sta,chan)
-								
+							
 						if r_epi:
 							amp_unit = 'mm'
-							
+						
 							R = r_hyp
 							h = ev_depth
 
@@ -658,9 +722,9 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 
 						IQR_mags = mag_data[~((mag_data.mag_corr < lowqe_bound) | (mag_data.mag_corr > upper_bound))]
 						# Run a check for anomalous station magnitudes (+ or - 2 from original value)
-						if len(IQR_mags.sta.unique()) <= 3:
-							IQR_mags = IQR_mags[(IQR_mags.mag_corr <= event.preferred_magnitude().mag + 2) & (IQR_mags.mag_corr >= event.preferred_magnitude().mag - 2)]
-			
+	# 						if len(IQR_mags.sta.unique()) <= 3:
+						IQR_mags = IQR_mags[(IQR_mags.mag_corr <= event.preferred_magnitude().mag + 2) & (IQR_mags.mag_corr >= event.preferred_magnitude().mag - 2)]
+		
 						CML = IQR_mags.mag_corr.mean()
 						new_std = IQR_mags.mag_corr.std()
 						CML_unc = np.sqrt(nz20_res ** 2 + np.var(IQR_mags.mag_corr))
@@ -686,7 +750,7 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 					pref_mag_unc, event.preferred_magnitude().mag, 
 					event.preferred_magnitude().magnitude_type, event.preferred_magnitude().mag_errors.uncertainty, 
 					ev_ndef, ev_nsta, pref_mag_nmag, std, reloc])			
-	
+
 			# Get arrival data
 			for i, arrival in enumerate(arrivals):
 				arid = eventid+str('a')+str(i+1)
@@ -700,7 +764,7 @@ def convert_eq(eventid,client_NZ,client_IU,station_df,sta_corr,event_df_file,
 				loc = pick.waveform_id.location_code
 				chan = pick.waveform_id.channel_code
 				phase_line.append([arid, arr_datetime, net, sta, loc, chan, phase, arr_t_res, eventid])
-	
+
 		event_df = pd.DataFrame(event_line, columns=['evid', 'datetime', 'lat', 'lon', 'depth', 'loc_type', 
 			'loc_grid', 'mag', 'mag_type', 'mag_method', 'mag_unc', 'mag_orig', 'mag_orig_type', 'mag_orig_unc', 'ndef', 'nsta', 'nmag', 't_res', 'reloc'])	
 		arrival_df = pd.DataFrame(phase_line, columns=['arid', 'datetime', 'net', 'sta', 'loc', 'chan', 'phase', 't_res', 'evid'])
@@ -720,7 +784,7 @@ directory = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/testaroo/'
 sta_corr = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/sta_corr_new.csv')
 
 ### File with GEONET events
-filename = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/earthquakes-5.csv'
+filename = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/earthquakes-7.csv'
 geonet = pd.read_csv(filename,low_memory=False)
 geonet = geonet.sort_values('origintime')
 # geonet['origintime'] = pd.to_datetime(geonet['origintime']).astype('datetime64[ns]')
@@ -751,8 +815,8 @@ if not os.path.exists(directory):
 
 ### Enter years and months that you are interested in processing data for. Note that one
 ### year of data can take up to several days to process (in the case of 2016).
-years = np.arange(2008,2009)
-months = np.arange(11,13)
+years = np.arange(2001,2005)
+months = np.arange(1,13)
 
 for year in years:
 	for month in months:

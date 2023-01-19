@@ -1,0 +1,46 @@
+FAULT SOURCES - New Zealand National Seismic Hazard Model 2010 (created 05-Nov-2013)
+Row 1: FaultName
+Row 2: TectonicType , FaultType
+Row 3: LengthMean , LengthSigma (km)
+Row 4: DipMean , DipSigma (deg)
+Row 5: DipDir
+Row 6: Rake (deg)
+Row 7: RupDepthMean , RupDepthSigma (km)
+Row 8: RupTopMean, RupTopMin RupTopMax  (km)
+Row 9: SlipRateMean , SlipRateSigma (mm/yr)
+Row 10: CouplingCoeff , CouplingCoeffSigma (mm/yr)
+Row 11: MwMedian , RecurIntMedian  (yr)
+Row 12: Num Locations on Fault Surface
+Row 13+: Location Coordinates (Long, Lat)
+FiordSZ03
+SUBDUCTION_INTERFACE INTERFACE_FAULTING
+    41.000     6.150
+    35.000     5.000
+   140.000
+    90.000
+    15.000     1.000
+     0.000     0.000     1.000
+     2.000     0.400
+     1.000     0.000
+      7.20 1.9e+100
+         3
+166.70000 -45.27000
+166.90000 -45.05000
+167.03000 -45.00000
+
+FiordSZ09
+SUBDUCTION_INTERFACE INTERFACE_FAULTING
+   150.000    22.500
+    30.000     2.500
+   120.000
+    90.000
+    30.000     1.000
+    10.000     9.000    11.000
+    12.000     2.400
+     1.000     0.000
+      7.60 1.9e+100
+         4
+165.50000 -46.40000
+165.70000 -46.00000
+166.15000 -45.50000
+166.60000 -45.30000

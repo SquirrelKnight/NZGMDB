@@ -1,18 +1,17 @@
 import pandas as pd
 import os
+import glob
 
-directory = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/testaroo/'
+directory = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/IM_catalogue'
 
-gm_im_df_6 = pd.read_csv(directory+'IM_catalogue/ground_motion_im_catalogue_6_final.csv',low_memory=False)
-gm_im_df_5 = pd.read_csv(directory+'IM_catalogue/ground_motion_im_catalogue_5_final.csv',low_memory=False)
-gm_im_df_45 = pd.read_csv(directory+'IM_catalogue/ground_motion_im_catalogue_45_final.csv',low_memory=False)
-gm_im_df_4 = pd.read_csv(directory+'IM_catalogue/ground_motion_im_catalogue_4_final.csv',low_memory=False)
-gm_im_dfs = pd.concat((gm_im_df_6,gm_im_df_5,gm_im_df_45,gm_im_df_4))
-# gm_im_df = pd.read_csv(directory+'IM_catalogue/ground_motion_im_catalogue_final.csv',low_memory=False)
+files = glob.glob(directory+'/ground_motion*final.csv') # Check to make sure this doesn't merge in an already merged file
 
-# remove_ids = gm_im_dfs.evid.unique()
-# 
-# gm_im_df = gm_im_df[gm_im_df.evid.isin(remove_ids) == False]
-# merged_df = pd.concat([gm_im_df,gm_im_dfs])
+gm_im_dfs = pd.concat([pd.read_csv(file, low_memory=False) for file in files])
+gm_im_dfs.sort_values('datetime',inplace=True)
 
-gm_im_dfs.to_csv(directory+'IM_catalogue/ground_motion_im_catalogue_merged_final.csv',index=False)
+# Excise scores that made it through the process...
+gm_im_dfs = gm_im_dfs[(gm_im_dfs.score_mean_X >= 0.5) & (gm_im_dfs.score_mean_Y >= 0.5) & (gm_im_dfs.score_mean_Z >= 0.5)]
+
+gm_im_dfs.reset_index(drop=True)
+
+gm_im_dfs.to_csv(directory+'/complete_ground_motion_im_catalogue_final.csv',index=False)

@@ -1,0 +1,3 @@
+# out directory and all its contents
+/out/*
+/__pycache__/*

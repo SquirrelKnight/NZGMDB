@@ -269,12 +269,9 @@ def convert_eq(row,client_NZ,client_IU,event_cat,sta_df,mag_df,sta_corr,event_df
 
 directory = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/testaroo/'
 
-event_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/seismicity_relocated_june11.dat',low_memory=False)
-# event_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/martins_new.csv',low_memory=False)
-event_df['evid'] = event_df.evid.astype(str)
-event_cat = pd.read_csv(directory+'earthquake_source_table.csv',low_memory=False)
+event_cat = pd.read_csv(directory+'events_corr_mb.csv',low_memory=False)
 event_cat['evid'] = event_cat.evid.astype(str)
-mag_df = pd.read_csv(directory+'station_magnitude_table.csv',low_memory=False)
+mag_df = pd.read_csv(directory+'mags_corr_mb.csv',low_memory=False)
 mag_df['evid'] = mag_df['evid'].astype('str')
 
 # Load station information from FDSN in case station csv is not complete
@@ -299,8 +296,10 @@ sta_df = sta_df.drop_duplicates().reset_index(drop=True)
 # prop_df = pd.read_csv(directory+'propagation_path_table.csv',low_memory=False)
 sta_corr = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/sta_corr_new.csv')
 
+event_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/martins_new.csv',low_memory=False)
+event_df['evid'] = event_df.evid.astype(str)
 ### Calculate for Reyners relocated data
-years = np.arange(2000,2021)
+years = np.arange(2000,2022)
 for year in years:
 	process_year = year
 	
@@ -347,8 +346,10 @@ mags_df = pd.concat([pd.read_csv(f,low_memory=False) for f in glob.glob(director
 events_df.to_csv(directory+'relocated_earthquake_source_table.csv',index=False)
 mags_df.to_csv(directory+'relocated_station_magnitude_table.csv',index=False)
 
+event_df = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/seismicity_relocated_june11.dat',low_memory=False)
+event_df['evid'] = event_df.evid.astype(str)
 ### Calculate for ISC data
-years = np.arange(2000,2021)
+years = np.arange(2000,2022)
 for year in years:
 	process_year = year
 	

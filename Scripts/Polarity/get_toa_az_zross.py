@@ -8,6 +8,9 @@ from pandarallel import pandarallel		# conda install -c bjrn pandarallel
 import glob
 from math import acos,sqrt,pi
 from obspy.geodetics import gps2dist_azimuth
+import ray
+from datetime import datetime
+import os
 
 
 def rotate(orilat, orilon, lats, lons, angle):
@@ -63,10 +66,14 @@ def rotate_back(orilat, orilon, xs, ys, angle):
     return lats, lons
 
 	
-def get_path(sta,arr_file):
+def get_path(sta,idx,sta_num,arr_file,events,stations,orilat,orilon,angle):
     # Calculates azimuth and takeoff angle information using 3d traveltime grids from
     # Pykonal
+    
+    print('Processing data for station '+str(idx)+'/'+str(sta_num)+': '+str(sta.sta))
     arr_file_sub = arr_file.copy()[arr_file.sta == sta.sta].reset_index(drop=True)
+    event_sub_list = arr_file_sub.evid.unique()
+    events_sub = events[events['evid'].isin(event_sub_list)].reset_index(drop=True)
     lat, lon, el = stations[sta.sta]['coords']
     tts = []
     tts.append(pykonal.fields.read_hdf('/Volumes/SeaJade 2 Backup/NZ/EQTransformer/inputs/tt/'+sta.sta+'_P.hdf'))
@@ -77,9 +84,12 @@ def get_path(sta,arr_file):
 #     tts.append(pykonal.fields.read_hdf('/Volumes/SeaJade2/Pykonal/tt_fine/'+sta.sta+'_S.hdf'))
     sta_x, sta_y = rotate(orilat, orilon, lat, lon, angle)
     sta_z = (-el/1000)
-    for i,event in events.iterrows():
-        x, y = rotate(orilat, orilon, event.lat, event.lon, angle)
-        z = event.depth
+    xs, ys = rotate(orilat, orilon, events_sub.lat, events_sub.lon, angle)
+    zs = events_sub.depth.values
+    for i,event in events_sub.iterrows():
+        print(str(sta.sta)+': '+str(i)+'/'+str(len(events_sub)))
+        x, y = xs[i],ys[i]
+        z = events_sub.depth.iloc[i]
         arrivals = arr_file_sub[(arr_file_sub.evid == event.evid) & (arr_file_sub.sta == sta.sta)]
         dist,azimuth,back_azimuth = gps2dist_azimuth(event.lat,event.lon,lat,lon)
         dist = dist / 1000
@@ -93,13 +103,15 @@ def get_path(sta,arr_file):
                     else:
                         tt = tts[1]
                         phase = 'S'
-
                     # Get last two coordinates to calculate takeoff angle and azimuth, get first two to calculate
                     # incident angle and back azimuth
                     ray_path = tt.trace_ray(np.array([x,y,z]))
+                    if len(ray_path) <= 1:
+                        continue
                     # Rotate ray_path coordinates back to lat,lon. If this is not done,
                     # computing azimuth is inaccurate.
                     ray_lat,ray_lon = rotate_back(orilat,orilon,ray_path[:,0],ray_path[:,1],-angle)
+                    
                     x2,x1 = ray_lon[-2::]
                     y2,y1 = ray_lat[-2::]
                     z2,z1 = ray_path[-2:,2]
@@ -137,8 +149,8 @@ def get_path(sta,arr_file):
                     if phase == 'P':
                         arr_file_sub.loc[arrival.name,['p_az','p_toa','p_baz','p_ia','dist']] = az,toa,b_az,ia,dist
                     else:
-                        arr_file_sub.loc[arrival.name,['s_az','s_toa','s_baz','s_ia','dist']] = az,toa,b_az,ia,dist
-                    print(azimuth,az,toa,b_az,ia,dist,sta.sta,event.evid)
+                        arr_file_sub.loc[arrival.name,['s_az','s_toa','s_baz','s_ia','dist']] = az,toa,b_az,ia,dist            
+#                     print(azimuth,az,toa,b_az,ia,dist,sta.sta,event.evid)
     return arr_file_sub
 
 
@@ -210,64 +222,94 @@ def pd_to_HASH(arr_final,events,basedir):
 orilat = -41.7638  # Origin latitude
 orilon = 172.9037  # Origin longitude
 angle = 140  # Counter-clockwise rotation for restoration of true coordinates
+limit = 8 # Minimum number of stations required to be considered for computations
 basedir = '/Users/jesse/bin/HASH_v1.2'
+outdir = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/Scripts/Polarity/phase_tables'
+arr_dir = '/Volumes/SeaJade 2 Backup/zross_picker/phase'
 
 Blank = ''
 
 # arr_file = pd.read_csv('/Volumes/SeaJade 2 Backup/zross_picker/phase/2016p858725.csv',low_memory=False)
-arr_dir = '/Volumes/SeaJade 2 Backup/zross_picker/phase'
-arr_files = glob.glob(arr_dir+'/*.csv')[0:100]
+ev_file = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/relocated_output/earthquake_source_table_complete.csv',low_memory=False)
+ev_file['evid'] = ev_file['evid'].astype('str')
 
-arr_file = pd.concat([pd.read_csv(arr_file) for arr_file in arr_files])
-ev_file = pd.read_csv('/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/earthquake_source_table_complete.csv',low_memory=False)
-events = ev_file[ev_file.evid.isin(arr_file.evid)]
+if not os.path.exists(outdir):
+    os.makedirs(outdir)
 
-sta_list = arr_file[['sta','chan']].copy()
-sta_list_chan = sta_list[['sta','chan']].copy().drop_duplicates().reset_index(drop=True)
-sta_list = sta_list[['sta']].drop_duplicates().reset_index(drop=True)
-tts = []
+# Subset data by year-month to break up the work into smaller jobs.
+years = np.arange(2001,2002)
+months = np.arange(6,13)
+for year in years:
+    for month in months:
+        year_dir = str(year)
+        month_dt = datetime.strptime(str(month), '%m')
+        month_dir = month_dt.strftime('%m')+'_'+month_dt.strftime('%b')
+        arr_files = glob.glob(arr_dir+'/'+year_dir+'/'+month_dir+'/**/*.csv',recursive=True)
 
-with open('/Volumes/SeaJade 2 Backup/NZ/Pykonal/station_list.json') as f:
-	stations = json.load(f)
+        arr_file_all = pd.concat([pd.read_csv(arr_file) for arr_file in arr_files])
+        arr_file_all['evid'] = arr_file_all['evid'].astype('str')
+        grouping = arr_file_all.groupby(['evid','sta']).size().groupby(level=0)
+        event_filter = grouping.count()[grouping.count() >= limit].index
+        arr_file = arr_file_all[arr_file_all.evid.isin(event_filter)].reset_index(drop=True)
 
-pandarallel.initialize(nb_workers=8,progress_bar=False) # Customize the number of parallel workers
-arr_final = sta_list.parallel_apply(lambda x: get_path(x,arr_file),axis=1)
-arr_final = pd.concat((arr for arr in arr_final)).reset_index(drop=True)
+        events = ev_file[ev_file.evid.isin(arr_file.evid)].reset_index(drop=True)
 
-arr_final.to_csv('kaikoura_phase_table.csv',index=False)
+        sta_list = arr_file[['sta','chan']].copy()
+        sta_list_chan = sta_list[['sta','chan']].copy().drop_duplicates().reset_index(drop=True)
+        sta_list = sta_list[['sta']].drop_duplicates().reset_index(drop=True)
+        sta_num = len(sta_list)
+        tts = []
 
-pd_to_HASH(arr_final,events,basedir)
+        with open('/Volumes/SeaJade 2 Backup/NZ/Pykonal/station_list.json') as f:
+            stations = json.load(f)
 
-# Generate Station file
-stationfile = basedir+'/kaikoura.stations'
-fs = open(stationfile,'w')
-for i,sta in sta_list_chan.sort_values('sta').iterrows():
-	station = sta.sta		
-	chan = sta.chan
-	coords = stations[station]['coords']
-	lat = coords[0]
-	lon = coords[1]
-	el = coords[2]
-	net = stations[station]['network']
-	print('%-4s%1s%3s%33s%9.5f%1s%10.5f%1s%5i%23s%2s'%(station,Blank,chan,Blank,lat,Blank,
-	    lon,Blank,el,Blank,net),sep='',file=fs)
-fs.close()
+        ray.init(num_cpus=8, num_gpus=1)
+        get_path_r = ray.remote(get_path)
+        result_ids = [get_path_r.remote(row,idx+1,sta_num,arr_file,events,stations,orilat,orilon,angle) for idx,row in sta_list.iterrows()]
+        results = ray.get(result_ids)
+        ray.shutdown()
+        arr_final = pd.concat((result for result in results)).reset_index(drop=True)
+        arr_final.sort_values(['evid','sta'],inplace=True)
+        
+        arr_final.to_csv(outdir+'/'+str(year)+'_'+str(month)+'_phase_table.csv',index=False)
 
-# Generate station polarity reversal file
-reversalfile = basedir+'/kaikoura.reverse'
-fr = open(reversalfile,'w')
-for i,sta in sta_list.sort_values('sta').iterrows():	
-	Rev_beg = 0
-	Rev_end = 0
-	print('%-4s%1s%8i%1s%8i'%(sta.sta,Blank,Rev_beg,Blank,Rev_end),sep='',file=fr)
-fr.close()
+# pandarallel.initialize(nb_workers=8,progress_bar=False) # Customize the number of parallel workers
+# arr_final = sta_list.parallel_apply(lambda x: get_path(x,arr_file,events,stations,orilat,orilon,angle),axis=1)
+# arr_final = pd.concat((arr for arr in arr_final)).reset_index(drop=True)
 
-# Generate station correction file
-corrfile = basedir+'/kaikoura.statcor'
-fc = open(corrfile,'w')
-for i,sta in sta_list_chan.sort_values('sta').iterrows():
-    station = sta.sta
-    channel = sta.chan
-    average = 0 # Shift of mean observed log10(S/P) ratios to match average of theoretical distribution
-    print('%-4s%2s%3s%1s%2s%1s%7.4f' % (station,Blank,channel,Blank,'XX',Blank,0), sep = "",file=fc)
-fc.close()
+
+# pd_to_HASH(arr_final,events,basedir)
+# 
+# # Generate Station file
+# stationfile = basedir+'/kaikoura.stations'
+# fs = open(stationfile,'w')
+# for i,sta in sta_list_chan.sort_values('sta').iterrows():
+# 	station = sta.sta		
+# 	chan = sta.chan
+# 	coords = stations[station]['coords']
+# 	lat = coords[0]
+# 	lon = coords[1]
+# 	el = coords[2]
+# 	net = stations[station]['network']
+# 	print('%-4s%1s%3s%33s%9.5f%1s%10.5f%1s%5i%23s%2s'%(station,Blank,chan,Blank,lat,Blank,
+# 	    lon,Blank,el,Blank,net),sep='',file=fs)
+# fs.close()
+# 
+# # Generate station polarity reversal file
+# reversalfile = basedir+'/kaikoura.reverse'
+# fr = open(reversalfile,'w')
+# for i,sta in sta_list.sort_values('sta').iterrows():	
+# 	Rev_beg = 0
+# 	Rev_end = 0
+# 	print('%-4s%1s%8i%1s%8i'%(sta.sta,Blank,Rev_beg,Blank,Rev_end),sep='',file=fr)
+# fr.close()
+# 
+# # Generate station correction file
+# corrfile = basedir+'/kaikoura.statcor'
+# fc = open(corrfile,'w')
+# for i,sta in sta_list_chan.sort_values('sta').iterrows():
+#     station = sta.sta
+#     channel = sta.chan
+#     average = 0 # Shift of mean observed log10(S/P) ratios to match average of theoretical distribution
+#     print('%-4s%2s%3s%1s%2s%1s%7.4f' % (station,Blank,channel,Blank,'XX',Blank,0), sep = "",file=fc)
+# fc.close()

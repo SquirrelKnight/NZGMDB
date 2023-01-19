@@ -1,8 +1,9 @@
 from abc import ABC
 import pandas as pd
-import mag_scaling
+import mag_scaling # Extracted from the qcore package
 from pyproj import Transformer			# conda install pyproj
 import math
+from math import sqrt, cos, sin, atan, atan2, acos, asin, pi
 import numpy as np
 from typing import List, Union, Dict
 from qcore import nhm, formats, geo, srf
@@ -19,6 +20,184 @@ from obspy import UTCDateTime
 # Convert from WGS84 to NZGD2000
 wgs2nztm = Transformer.from_crs(4326, 2193)
 nztm2wgs = Transformer.from_crs(2193, 4326)
+
+def fpcoor_2SDR(fnorm, slip):
+#     degrad = 180/np.pi
+    if 1 - abs(fnorm[2]) < 1e-7:
+        delt = 0
+        phi = atan2(-slip[0],slip[1])
+        clam = cos(phi) * slip[0] + sin(phi) * slip[1]
+        slam = sin(phi) * slip[0] - cos(phi) * slip[1]
+        lam = atan2(slam, clam)
+    else:
+        phi = atan2(-fnorm[0], fnorm[1])
+        a = sqrt(fnorm[0] ** 2 + fnorm[1] ** 2)
+        delt = atan2(a, -fnorm[2])
+        clam = cos(phi) * slip[0] + sin(phi) * slip[1]
+        slam = -slip[2] / sin(delt)
+        lam = atan2(slam, clam)
+        if delt > 0.5 * np.pi:
+            delt = np.pi - delt
+            phi = phi + np.pi
+            lam = -lam
+    strike = np.rad2deg(phi)
+    if strike < 0:
+        strike = strike + 360
+    dip = np.rad2deg(delt)
+    rake = np.rad2deg(lam)
+    if rake <= -180:
+        rake = rake + 360
+    if rake > 180:
+        rake = rake - 360
+    return strike,dip,rake
+
+def fpcoor_2FS(strike, dip, rake):
+#     degrad = 180/np.pi
+    phi = np.deg2rad(strike)
+    delt = np.deg2rad(dip)
+    lam = np.deg2rad(rake)
+#     phi = strike/degrad
+#     delt = dip/degrad
+#     lam = rake/degrad
+
+    fnorm = -sin(delt) * sin(phi), sin(delt) * cos(phi), -cos(delt)
+    slip = cos(lam) * cos(phi) + cos(delt) * sin(lam) * sin(phi), \
+        cos(lam) * sin(phi) - cos(delt) * sin(lam) * cos(phi), \
+        -sin(lam) * sin(delt)
+        
+    return fnorm, slip           
+
+def mech_rot(in_data):
+    norm1 = in_data[0:3]
+    norm2 = in_data[3:6]
+    slip1 = in_data[6:9]
+    slip2 = in_data[9:12]
+    
+    degrad = 180/np.pi
+    rotemp = np.zeros(4)
+    for itr in range(0,4):
+        n1 = np.empty(3)
+        n2 = np.empty(3)
+        if itr < 2:
+            norm2_temp = norm2
+            slip2_temp = slip2
+        else:
+            norm2_temp = slip2
+            slip2_temp = norm2
+        if (itr == 1) or (itr == 3):
+            norm2_temp = -norm2_temp
+            slip2_temp = -slip2_temp
+        
+        B1 = np.cross(norm1, slip1)
+        B2 = np.cross(norm2_temp, slip2_temp)
+        
+        phi1 = np.dot(norm1,norm2_temp)
+        phi2 = np.dot(slip1,slip2_temp)
+        phi3 = np.dot(B1,B2)
+        
+        # In some cases, identical dot products produce values incrementally higher than 1
+        if phi1 > 1:
+            phi1 = 1
+        if phi2 > 1:
+            phi2 = 1
+        if phi3 > 1:
+            phi3 = 1
+        if phi1 < -1:
+            phi1 = -1
+        if phi2 < -1:
+            phi2 = -1
+        if phi3 < -1:
+            phi3 = -1
+        
+        phi = acos(phi1), acos(phi2), acos(phi3)
+        
+        # If the mechanisms are very close, rotation = 0
+        if (phi[0] < 1e-4) and (phi[1] < 1e-4) and (phi[2] < 1e-4):
+            rotemp[itr] = 0
+        # If one vector is the same, it is the rotation axis
+        elif phi[0] < 1e-4:
+            rotemp[itr] = degrad * phi[1]
+        elif phi[1] < 1e-4:
+            rotemp[itr] = degrad * phi[2]
+        elif phi[2] < 1e-4:
+            rotemp[itr] = degrad * phi[0]
+        # Find difference vectors - the rotation axis must be orthogonal to all three of
+        # these vectors
+        else:
+            n = np.array([np.array(norm1) - np.array(norm2_temp), np.array(slip1) - np.array(slip2_temp), np.array(B1) - np.array(B2)])
+#             n = np.zeros([3,3])
+#             for i in range(0,3):
+#                 n[i,0] = norm1[i] - norm2_temp[i]
+#                 n[i,1] = slip1[i] - slip2_temp[i]
+#                 n[i,2] = B1[i] - B2[i]
+                
+#             scale = np.zeros(3)
+#             for j in range(0,3):
+#                 scale[j] = sqrt(n[0][j] ** 2 + n[1][j] ** 2 + n[2][j] ** 2)
+#                 print(scale)
+#                 for i in range(0,3):
+#                     n[i,j] = n[i,j] / scale[j]
+            scale = np.sqrt(np.sum(n ** 2,axis=0))
+            n = n / scale
+            qdot = n[0][1] * n[0][2] + n[1][1] * n[1][2] + n[2][1] * n[2][2], \
+                n[0][0] * n[0][2] + n[1][0] * n[1][2] + n[2][0] * n[2][2], \
+                n[0][0] * n[0][1] + n[1][0] * n[1][1] + n[2][0] * n[2][1]
+                
+            # Use the two largest difference vectors, as long as they aren't orthogonal
+            iout = -1
+            for i in range(0,3):
+                if qdot[i] > 0.9999:
+                    iout = i
+            if iout == -1:
+                qmins = 10000
+                qmins = scale.min()
+                iout = np.where(scale == scale.min())[0][0]
+            k = 1
+            for j in range(0,3):
+                if j != iout:
+                    if k == 1:
+                        n1 = n[:,j]
+                        k = 2
+                    else:
+                        n2 = n[:,j]
+            # Find rotation axis by taking cross product
+            R = np.cross(n1,n2)
+#             scaleR = np.sqrt(R[0] ** 2 + R[1] ** 2 + R[2] ** 2)
+            scaleR = sqrt(np.sum(R ** 2))
+            R = R / scaleR
+            
+            # Find rotation using axis furthest from rotation axis
+            theta = np.array([acos(np.dot(norm1,R)), \
+                acos(np.dot(slip1,R)), \
+                acos(np.dot(B1,R))])
+            qmindifs = abs(theta - np.pi/2)
+            iuse = np.argmin(qmindifs[0:2]) # Pick the minimum from either the norm or slip axes
+            rotemp[itr] = (cos(phi[iuse]) - cos(theta[iuse]) * cos(theta[iuse])) \
+                / (sin(theta[iuse]) * sin(theta[iuse]))
+            if rotemp[itr] > 1:
+                rotemp[itr] = 1
+            if rotemp[itr] < -1:
+                rotemp[itr] = -1
+            rotemp[itr] = degrad * acos(rotemp[itr])
+        
+    # Find the minimum rotation for the 4 combos and change norm2 and slip2
+    rota = 180
+    irot = np.argmin(rotemp)
+    rota = rotemp[irot]
+    if irot < 2:
+        norm2_out = norm2
+        slip2_out = slip2
+        plane_out = 1
+    else:
+        norm2_out = slip2
+        slip2_out = norm2
+        plane_out = 2
+    if (irot == 1) or (irot == 3):
+        norm2_out = -norm2_out
+        slip2_out = -slip2_out
+
+    return rota, norm2_out, slip2_out, plane_out
+
 
 class Fault(ABC):
     subfault_spacing = 0.1
@@ -132,20 +311,20 @@ class Fault(ABC):
     def _set_dip(self, value):
         self._dip = value
 
-def TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis):
+def TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis,rrups_lon,rrups_lat,rrups_depth):
     from shapely.geometry import Point
     from shapely.geometry.polygon import Polygon, LineString
     import numpy as np
 
     # Taupo VZ polygon acquired from https://www.geonet.org.nz/data/supplementary/earthquake_location_grope
 
-#     for index,row in df[0:10].iterrows():
     event_id = row.evid
     ev_lat = row.lat
     ev_lon = row.lon
     ev_depth = row.depth
     reloc = row.reloc
     ev_transform = wgs2nztm.transform(ev_lat,ev_lon)
+    rrups_transform = wgs2nztm.transform(rrups_lat,rrups_lon)
 #         if ev_lon < 0:
 #             ev_lon = ev_lon+360
     network = sta_df.net
@@ -157,6 +336,8 @@ def TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis):
 #         if sta_lon < 0:
 #             sta_lon = sta_lon+360
     tvz_lengths = []
+    boundary_dists_rjb = []
+#     boundary_dists_rrup = []
     ii = 0
     for i,sta in sta_df.iterrows():
         sta_transform = wgs2nztm.transform(sta.lat,sta.lon)
@@ -168,21 +349,42 @@ def TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis):
 #         r_hyp = (r_epi ** 2 + (ev_depth + sta.elev/1000) ** 2) ** 0.5
 #         r_epis.append(r_epi)
 #         r_hyps.append(r_hyp)
-        line = LineString([[ev_transform[0],ev_transform[1]],[sta_transform[0],sta_transform[1]]])
+        line = LineString([[rrups_transform[0][ii],rrups_transform[1][ii]],[sta_transform[0],sta_transform[1]]])
+#         line = LineString([[ev_transform[0],ev_transform[1]],[sta_transform[0],sta_transform[1]]])
     
         tvz_length = 0
+        boundary_dist_rjb = None
+#         boundary_dist_rrup = None
 
         if line.intersection(taupo_polygon):
+            polin = LineString(list(taupo_polygon.exterior.coords))
+            pt = polin.intersection(line)
+            if taupo_polygon.contains(Point(sta_transform)):
+                boundary_dist_rjb = 0
+#                 boundary_dist_rrup = 0
+            else:
+                if pt.geom_type != 'LineString':
+                    if pt.geom_type == 'MultiPoint':
+                        pt = pt[0]
+                    boundary_dist_rjb = np.sqrt((pt.xy[0][-1] - sta_transform[0]) ** 2 + (pt.xy[1][-1] - sta_transform[1]) ** 2) / 1000
+#                     boundary_dist_rrup = np.sqrt((pt.xy[0][-1] - sta_transform[0]) ** 2 + (pt.xy[1][-1] - sta_transform[1]) ** 2 + ((sta.depth - rrups_depth[i]) * 1000) ** 2) / 1000
+                else:
+                    boundary_dist_rjb = None
+#                     boundary_dist_rrup = None
             line_points = line.intersection(taupo_polygon)
             tvz_length = line_points.length / 1000 / r_epis[ii]
+            
             if tvz_length > 1:
                 tvz_length = 1
+#             TVZ_path_plot(df,taupo_polygon,line,nztm2wgs,r_epis[ii],sta)
         tvz_lengths.append(tvz_length)
+        boundary_dists_rjb.append(boundary_dist_rjb)
+#         boundary_dists_rrup.append(boundary_dist_rrup)
         ii += 1
     
     # Output evid, net, sta, r_epi, r_hyp, az, b_az, reloc, rrup, and rjb. toa has
     # been omitted. This is better left in the phase arrival table.
-    return tvz_lengths
+    return tvz_lengths, boundary_dists_rjb
 
 
 def rotate_back(x, y, xs, ys, angle):
@@ -223,6 +425,7 @@ def rotate_back(x, y, xs, ys, angle):
 
 # for i, row in event_df[0:10].iterrows():
 def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_files,srfs,geonet_cmt_df,event_out_file,props_out_file):
+# for index,df in event_sub.iterrows():
     row = df.copy()
 #     row = event_df[event_df.evid == '1506176'].iloc[0].copy()
 #     print(row.name)
@@ -232,7 +435,10 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
     depth = row.depth
     mag = row.mag
     reloc = row.reloc
-    if row.mag != -9 and ~np.isnan(row.mag):
+        
+    if np.isnan(mag):
+        mag = row.mag_orig
+    if mag != -9 and ~np.isnan(mag):
         try:
             # Calculate area from event tectonic type
             sta_df = df_merged[df_merged.evid.isin([evid])].merge(df_station[['net','sta','lat','lon','elev']],on=['sta'])
@@ -241,11 +447,14 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
             sta_df['depth'] = sta_df['elev']/-1000
             stations = sta_df[['lon','lat','depth']].to_numpy()
             # If crustal
-            if row.tect_class == 'Crustal': # Also use for slab
-                magnitude_scaling_relation = mag_scaling.MagnitudeScalingRelations.LEONARD2014
+            if row.tect_class == 'Interface':
+                magnitude_scaling_relation = mag_scaling.MagnitudeScalingRelations.SKARLATOUDIS2016
+            # If slab
+            elif row.tect_class == 'Slab':
+                magnitude_scaling_relation = mag_scaling.MagnitudeScalingRelations.STRASSER2010SLAB
             # If other
             else:
-                magnitude_scaling_relation = mag_scaling.MagnitudeScalingRelations.SKARLATOUDIS2016
+                magnitude_scaling_relation = mag_scaling.MagnitudeScalingRelations.LEONARD2014
             # Allen 2017 for Slab events or just Leonard (talk to Mike)?
 
             srf_flag = np.isin(evid,srfs)
@@ -300,6 +509,7 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
                     strike1 = cmt_2.strike1
                     dip1 = cmt_2.dip1
                     rake1 = cmt_2.rake1
+                    norm, slip = fpcoor_2FS(strike1, dip1, rake1)
                     strike2 = cmt_2.strike2
                     dip2 = cmt_2.dip2
                     rake2 = cmt_2.rake2
@@ -308,25 +518,26 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
                         do_strike = domain.strike
                         do_rake = domain.rake
                         do_dip = domain.dip
-                    
-                        strike1_diff = abs(do_strike-strike1)
-                        if strike1_diff > 180:
-                            strike1_diff = 360-strike1_diff
-                        strike2_diff = abs(do_strike-strike2)
-                        if strike2_diff > 180:
-                            strike2_diff = 360-strike2_diff
-                        if strike1_diff < strike2_diff:
-                            strike = strike1
-                            rake = rake1
-                            dip = dip1
-                        else:
-                            strike = strike2
-                            rake = rake2
-                            dip = dip2
                     else:
+                        do_strike = 220
+                        do_dip = 45
+                        do_rake = 90
+                        
+                    do_norm, do_slip = fpcoor_2FS(do_strike, do_dip, do_rake)
+                    rot_in = np.hstack((do_norm,norm,do_slip,slip))
+                    rota, norm_out, slip_out, plane_out = mech_rot(rot_in)
+                    
+                    if plane_out == 1:
                         strike = strike1
-                        rake = rake1
                         dip = dip1
+                        rake = rake1
+                    else:
+                        strike = strike2
+                        dip = dip2
+                        rake = rake2
+                    
+#                     strike, dip, rake = fpcoor_2SDR(norm_out,slip_out)
+                    
                 else:
                     f_type = 'domain'
                     if row.domain_no == 0:
@@ -394,9 +605,10 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
                     r_hyps = np.sqrt(r_epis ** 2 + (depth - sta_df.depth.values) ** 2)
                     azs = np.array([geo.ll_bearing(lon,lat,station[0],station[1]) for station in stations])
                     b_azs = np.array([geo.ll_bearing(station[0],station[1],lon,lat) for station in stations])
-                    tvz_lengths = TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis)
+                    rrups_lon,rrups_lat,rrups_depth = np.repeat(row.lon,len(stations)),np.repeat(row.lat,len(stations)),np.repeat(row.depth,len(stations))
+                    tvz_lengths, boundary_dists_rjb = TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis,rrups_lon,rrups_lat,rrups_depth)
 
-                    prop_df = pd.DataFrame(columns=['evid','net','sta','r_epi','r_hyp','r_jb','r_rup','r_x','r_y','r_tvz','az','b_az','reloc'])
+                    prop_df = pd.DataFrame(columns=['evid','net','sta','r_epi','r_hyp','r_jb','r_rup','r_x','r_y','r_tvz','r_xvf','az','b_az','reloc'])
                     prop_df[['evid','net','sta']] = sta_df[['evid','net','sta']]
                     prop_df['r_epi'] = r_epis
                     prop_df['r_hyp'] = r_hyps
@@ -407,6 +619,8 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
                     if len(rys) > 0:
                         prop_df['r_y'] = rys
                     prop_df['r_tvz'] = tvz_lengths
+                    prop_df['r_xvf'] = boundary_dists_rjb
+#                     prop_df['r_xvf_rup'] = boundary_dists_rrup
                     prop_df['az'] = azs
                     prop_df['b_az'] = b_azs
                     prop_df['f_type'] = f_type
@@ -425,11 +639,12 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
                     row_out = row_out.to_frame().T
                     row_out.to_csv(event_out_file,index=False,header=False,mode='a')
                     prop_df.to_csv(props_out_file,index=False,header=False,mode='a')
+#                     continue
                     return
         #             return row, prop_df
                 strike_dist = length / nstrike  
 
-                for j in range(nstrike+1):
+                for j in range(nstrike):
                     top_lat, top_lon = geo.ll_shift(lat1, lon1, strike_dist * j, end_strike)
                     srf_points.append((top_lon, top_lat, dtop))
 
@@ -438,11 +653,11 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
                 vdip_dist = height / ndip
 
                 plane_offset = 0
-                for j in range(1, ndip+1): #added plus 1 to ndip so that it has the bottom srf points
+                for j in range(1, ndip): #added plus 1 to ndip so that it has the bottom srf points
                     hdist = j * hdip_dist
                     vdist = j * vdip_dist + dtop
                     for local_lon, local_lat, local_depth in srf_points[
-                        plane_offset : plane_offset + nstrike + 1
+                        plane_offset : plane_offset + nstrike
                     ]:
                         new_lat, new_lon = geo.ll_shift(
                             local_lat, local_lon, hdist, dip_dir
@@ -460,7 +675,7 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
         #     plt.axis('equal')
         #     plt.show()
     
-            rrups, rjbs = src_site_dist.calc_rrup_rjb(srf_points, stations)
+            rrups, rjbs, rrups_lon, rrups_lat, rrups_depth = src_site_dist.calc_rrup_rjb(srf_points, stations)
             if srf_header:
                 rxs, rys = src_site_dist.calc_rx_ry(srf_points, srf_header, stations)
             else:
@@ -482,9 +697,9 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
             r_hyps = np.sqrt(r_epis ** 2 + (depth - sta_df.depth.values) ** 2)
             azs = np.array([geo.ll_bearing(lon,lat,station[0],station[1]) for station in stations])
             b_azs = np.array([geo.ll_bearing(station[0],station[1],lon,lat) for station in stations])
-            tvz_lengths = TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis)
+            tvz_lengths, boundary_dists_rjb = TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,rjbs,rrups_lon,rrups_lat,rrups_depth)
 
-            prop_df = pd.DataFrame(columns=['evid','net','sta','r_epi','r_hyp','r_jb','r_rup','r_x','r_y','r_tvz','az','b_az','reloc'])
+            prop_df = pd.DataFrame(columns=['evid','net','sta','r_epi','r_hyp','r_jb','r_rup','r_x','r_y','r_tvz','r_xvf','az','b_az','reloc'])
             prop_df[['evid','net','sta']] = sta_df[['evid','net','sta']]
             prop_df['r_epi'] = r_epis
             prop_df['r_hyp'] = r_hyps
@@ -495,6 +710,8 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
             if len(rys) > 0:
                 prop_df['r_y'] = rys
             prop_df['r_tvz'] = tvz_lengths
+            prop_df['r_xvf'] = boundary_dists_rjb
+#             prop_df['r_xvf_rup'] = boundary_dists_rrup
             prop_df['az'] = azs
             prop_df['b_az'] = b_azs
             prop_df['f_type'] = f_type
@@ -514,6 +731,7 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
             row_out.to_csv(event_out_file,index=False,header=False,mode='a')
             prop_df.to_csv(props_out_file,index=False,header=False,mode='a')
             return
+#             continue
         except Exception as e:
             print(e)
     else:
@@ -525,11 +743,12 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
         
         r_epis = geo.get_distances(np.dstack([sta_df.lon.values,sta_df.lat.values])[0],lon,lat)
         r_hyps = np.sqrt(r_epis ** 2 + (depth - sta_df.depth.values) ** 2)
+        rrups_lon,rrups_lat,rrups_depth = np.repeat(row.lon,len(stations)),np.repeat(row.lat,len(stations)),np.repeat(row.depth,len(stations))
         azs = np.array([geo.ll_bearing(lon,lat,station[0],station[1]) for station in stations])
         b_azs = np.array([geo.ll_bearing(station[0],station[1],lon,lat) for station in stations])
-        tvz_lengths = TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis)
+        tvz_lengths, boundary_dists_rjb = TVZ_path_calc(row,sta_df,taupo_polygon,tect_domain_points,wgs2nztm,r_epis,rrups_lon,rrups_lat,rrups_depth)
 
-        prop_df = pd.DataFrame(columns=['evid','net','sta','r_epi','r_hyp','r_jb','r_rup','r_x','r_y','r_tvz','az','b_az','reloc'])
+        prop_df = pd.DataFrame(columns=['evid','net','sta','r_epi','r_hyp','r_jb','r_rup','r_x','r_y','r_tvz','r_xvf','az','b_az','reloc'])
         prop_df[['evid','net','sta']] = sta_df[['evid','net','sta']]
         prop_df['r_epi'] = r_epis
         prop_df['r_hyp'] = r_hyps
@@ -538,6 +757,8 @@ def gregorny(df,df_merged,df_station,taupo_polygon,cmt_df,domain_focal_df,srf_fi
         prop_df['r_x'] = ''
         prop_df['r_y'] = ''
         prop_df['r_tvz'] = tvz_lengths
+        prop_df['r_xvf'] = boundary_dists_rjb
+#         prop_df['r_xvf_rup'] = boundary_dists_rrup
         prop_df['az'] = azs
         prop_df['b_az'] = b_azs
         prop_df['f_type'] = ''
@@ -564,7 +785,8 @@ directory = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/'
 geonet_cmt_df = pd.read_csv(directory+'focal/GeoNet_CMT_solutions.csv',low_memory=False)    
 cmt_df = pd.read_csv(directory+'focal/GeoNet_CMT_solutions_20201129_PreferredNodalPlane_v1.csv',low_memory=False)
 # event_df = pd.read_csv(directory+'converted_output/earthquake_source_table_fixed_mags.csv',low_memory=False)
-event_df = pd.read_csv(directory+'converted_output/earthquake_source_table_relocated_tectdomain.csv',low_memory=False)
+event_df = pd.read_csv(directory+'converted_output/earthquake_source_table_complete.csv',low_memory=False)
+event_df['evid'] = event_df.evid.astype('object')
 ### Filter data to be within lat/lon limitations.
 event_df_copy = event_df.copy()
 event_df_copy.loc[event_df_copy.lon < 0, 'lon'] = 360 + event_df_copy.lon[event_df_copy.lon < 0]
@@ -609,7 +831,7 @@ df_station = df_station.drop_duplicates().reset_index(drop=True)
 #     props_out = pd.concat([props_out,results[1]],ignore_index=True)
 #     print(i)
 
-years = np.arange(2000,2021)
+years = np.arange(2000,2022)
 # months = np.arange(1,13)
 # years = np.unique(geonet.origintime.values.astype('datetime64[Y]').astype(int)+1970)
 for year in years:
@@ -633,13 +855,21 @@ for year in years:
 #         cmt_df_sub = cmt_df[cmt_df['PublicID'].isin(event_list)]
         df_merged_sub = df_merged[df_merged['evid'].isin(event_list)] # Subsetting the data makes the program run significantly faster
 
+        # When using geonet derived data
         events_out = pd.DataFrame(columns=['evid', 'datetime', 'lat', 'lon', 'depth', 'loc_type', 'loc_grid',
                'mag', 'mag_type', 'mag_method', 'mag_unc', 'mag_orig', 'mag_orig_type', 'mag_orig_unc', 'ndef', 'nsta', 'nmag',
                't_res', 'reloc', 'tect_class', 'tect_method', 'domain_no',
                'domain_type', 'strike', 'dip', 'rake', 'f_length', 'f_width', 'f_type',
                'z_tor', 'z_bor'])
+        # When using data with MAXI locations, note that 'minimum' is 't_res'
+#         events_out = pd.DataFrame(columns=['evid', 'datetime', 'lat', 'lon', 'depth',
+#                'mag', 'mag_type', 'mag_method', 'mag_unc', 'mag_orig', 'mag_orig_type', 'mag_orig_unc', 'ndef', 'nsta', 'nmag',
+#                'reloc', 'minimum', 'finalgrid', 'x', 'y', 'z', 'x_c', 'y_c', 'z_c', 
+#                'major', 'minor', 'z_err', 'theta', 'Q', 'loc_type', 'loc_grid', 'tect_class', 'tect_method', 'domain_no',
+#                'domain_type', 'strike', 'dip', 'rake', 'f_length', 'f_width', 'f_type',
+#                'z_tor', 'z_bor'])
         props_out = pd.DataFrame(columns=['evid', 'net', 'sta', 'r_epi', 'r_hyp', 'r_jb', 'r_rup', 'r_x', 'r_y',
-               'r_tvz', 'az', 'b_az', 'reloc', 'f_type'])
+               'r_tvz', 'r_xvf', 'az', 'b_az', 'reloc', 'f_type'])
         events_out.to_csv(event_out_file,index=False)
         props_out.to_csv(props_out_file,index=False)
 

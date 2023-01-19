@@ -6,12 +6,12 @@ import numpy as np
 directory = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/converted_output/'
 
 event_cat = pd.read_csv(directory+'earthquake_source_table_complete.csv',low_memory=False)
-event_cat['datetime'] = pd.to_datetime(event_cat.datetime).astype('datetime64[ns]')
+event_cat['datetime'] = pd.to_datetime(event_cat['datetime'],utc=True)
 
-mag_df = pd.read_csv(directory+'station_magnitude_table_relocated.csv',low_memory=False)
+mag_df = pd.read_csv(directory+'station_magnitude_table.csv',low_memory=False)
 
 arr_df = pd.read_csv(directory+'phase_arrival_table.csv',low_memory=False)
-arr_df['datetime'] = pd.to_datetime(arr_df.datetime).astype('datetime64[ns]')
+arr_df['datetime'] = pd.to_datetime(arr_df['datetime'],utc=True)
 
 prop_df = pd.read_csv(directory+'propagation_path_table_complete.csv',low_memory=False)
 # prop_df['rrup'] = prop_df.r_hyp
@@ -20,7 +20,9 @@ prop_df = pd.read_csv(directory+'propagation_path_table_complete.csv',low_memory
 sta_df = pd.read_csv(directory+'site_table_basin.csv',low_memory=False)
 sta_df = sta_df.drop_duplicates() # Just in case any data is duplicated
 
-gm_im_df = pd.read_csv(directory+'IM_catalogue/ground_motion_im_catalogue_final.csv',low_memory=False)
+gm_im_df = pd.read_csv(directory+'IM_catalogue/complete_ground_motion_im_catalogue_final.csv',low_memory=False)
+
+clip_df = pd.read_csv(directory+'IM_catalogue/Tables/clip_table.csv',low_memory=False)
 
 unique_events = gm_im_df.evid.unique()
 
@@ -84,6 +86,10 @@ gm_im_df_flat['r_rup'] = (gm_im_df_flat['evid']+gm_im_df['sta']).map(prop_df_sub
 gm_im_df_flat['r_x'] = (gm_im_df_flat['evid']+gm_im_df['sta']).map(prop_df_sub.set_index(prop_df_sub['evid']+prop_df_sub['sta'])['r_x'])
 gm_im_df_flat['r_y'] = (gm_im_df_flat['evid']+gm_im_df['sta']).map(prop_df_sub.set_index(prop_df_sub['evid']+prop_df_sub['sta'])['r_y'])
 gm_im_df_flat['r_tvz'] = (gm_im_df_flat['evid']+gm_im_df['sta']).map(prop_df_sub.set_index(prop_df_sub['evid']+prop_df_sub['sta'])['r_tvz'])
+gm_im_df_flat['r_xvf'] = (gm_im_df_flat['evid']+gm_im_df['sta']).map(prop_df_sub.set_index(prop_df_sub['evid']+prop_df_sub['sta'])['r_xvf'])
+
+gm_im_df_flat['clip_prob'] = (gm_im_df_flat['evid']+gm_im_df['sta']).map(clip_df.set_index(clip_df['evid']+clip_df['sta'])['clip_prob'])
+gm_im_df_flat['clipped'] = (gm_im_df_flat['evid']+gm_im_df['sta']).map(clip_df.set_index(clip_df['evid']+clip_df['sta'])['clipped'])
 
 # Remove events in the flatfile from far outside of NZ
 gm_im_df_flat_sub = gm_im_df_flat.copy()
@@ -111,7 +117,7 @@ gm_im_df_flat = gm_im_df_flat[['gmid', 'datetime', 'evid', 'sta', 'loc', 'chan',
        'ev_lon', 'ev_depth', 'mag', 'mag_type', 'tect_class', 'reloc',
        'domain_no', 'domain_type', 'strike', 'dip', 'rake', 'f_length',
        'f_width', 'f_type', 'z_tor', 'z_bor', 'sta_lat', 'sta_lon',
-       'r_epi', 'r_hyp', 'r_jb', 'r_rup', 'r_x', 'r_y', 'r_tvz', 'Vs30',
+       'r_epi', 'r_hyp', 'r_jb', 'r_rup', 'r_x', 'r_y', 'r_tvz', 'r_xvf', 'Vs30',
        'Vs30_std', 'Q_Vs30', 'Tsite', 'Tsite_std', 'Q_Tsite', 'Z1.0',
        'Z1.0_std', 'Q_Z1.0', 'Z2.5', 'Z2.5_std', 'Q_Z2.5', 'site_domain_no','PGA',
        'PGV', 'CAV', 'AI', 'Ds575', 'Ds595', 'MMI', 'pSA_0.01', 'pSA_0.02',
@@ -119,8 +125,10 @@ gm_im_df_flat = gm_im_df_flat[['gmid', 'datetime', 'evid', 'sta', 'loc', 'chan',
        'pSA_0.15', 'pSA_0.17', 'pSA_0.2', 'pSA_0.25', 'pSA_0.3', 'pSA_0.4',
        'pSA_0.5', 'pSA_0.6', 'pSA_0.7', 'pSA_0.75', 'pSA_0.8', 'pSA_0.9',
        'pSA_1.0', 'pSA_1.25', 'pSA_1.5', 'pSA_2.0', 'pSA_2.5', 'pSA_3.0',
-       'pSA_4.0', 'pSA_5.0', 'pSA_6.0', 'pSA_7.5', 'pSA_10.0', 'score_X',
-       'f_min_X', 'score_Y', 'f_min_Y', 'score_Z', 'f_min_Z']]
+       'pSA_4.0', 'pSA_5.0', 'pSA_6.0', 'pSA_7.5', 'pSA_10.0', 
+       'score_mean_X','score_std_X','fmin_mean_X','fmin_std_X','multi_mean_X','multi_std_X',
+       'score_mean_Y','score_std_Y','fmin_mean_Y','fmin_std_Y','multi_mean_Y','multi_std_Y',
+       'score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z','multi_mean_Z','multi_std_Z']]
 # Find null Vs30 values and infill with Foster hybrid data    
 # gm_im_df_flat.loc[gm_im_df_flat.Vs30.isnull(),'Vs30'] = gm_im_df_flat[gm_im_df_flat.Vs30.isnull()].join(station_sub[['sta','Vs30_foster_hybrid']].set_index('sta'),on='sta',how='left').Vs30_foster_hybrid.values
 
@@ -131,11 +139,19 @@ df_ver = gm_im_df[gm_im_df.component == 'ver']
 df_rotd50 = gm_im_df[gm_im_df.component == 'rotd50']
 df_rotd100 = gm_im_df[gm_im_df.component == 'rotd100']
 
-df_000 = df_000.drop(['score_X','f_min_X','score_Z','f_min_Z'],axis=1)
-df_090 = df_090.drop(['score_Y','f_min_Y','score_Z','f_min_Z'],axis=1)
-df_ver = df_ver.drop(['score_X','f_min_X','score_Y','f_min_Y'],axis=1)
-df_rotd50 = df_rotd50.drop(['score_Z','f_min_Z'],axis=1)
-df_rotd100 = df_rotd100.drop(['score_Z','f_min_Z'],axis=1)
+df_000 = df_000.drop(['score_mean_X','score_std_X','fmin_mean_X','fmin_std_X',
+    'multi_mean_X','multi_std_X','score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
+df_090 = df_090.drop(['score_mean_Y','score_std_Y','fmin_mean_Y','fmin_std_Y',
+    'multi_mean_Y','multi_std_Y','score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
+df_ver = df_ver.drop(['score_mean_X','score_std_X','fmin_mean_X','fmin_std_X',
+    'multi_mean_X','multi_std_X','score_mean_Y','score_std_Y','fmin_mean_Y','fmin_std_Y',
+    'multi_mean_Y','multi_std_Y'],axis=1)
+df_rotd50 = df_rotd50.drop(['score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
+df_rotd100 = df_rotd100.drop(['score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
 
 df_000_flat = gm_im_df_flat[gm_im_df_flat.component == '000']
 df_090_flat = gm_im_df_flat[gm_im_df_flat.component == '090']
@@ -143,11 +159,19 @@ df_ver_flat = gm_im_df_flat[gm_im_df_flat.component == 'ver']
 df_rotd50_flat = gm_im_df_flat[gm_im_df_flat.component == 'rotd50']
 df_rotd100_flat = gm_im_df_flat[gm_im_df_flat.component == 'rotd100']
 
-df_000_flat = df_000_flat.drop(['score_X','f_min_X','score_Z','f_min_Z'],axis=1)
-df_090_flat = df_090_flat.drop(['score_Y','f_min_Y','score_Z','f_min_Z'],axis=1)
-df_ver_flat = df_ver_flat.drop(['score_X','f_min_X','score_Y','f_min_Y'],axis=1)
-df_rotd50_flat = df_rotd50_flat.drop(['score_Z','f_min_Z'],axis=1)
-df_rotd100_flat = df_rotd100_flat.drop(['score_Z','f_min_Z'],axis=1)
+df_000_flat = df_000_flat.drop(['score_mean_X','score_std_X','fmin_mean_X','fmin_std_X',
+    'multi_mean_X','multi_std_X','score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
+df_090_flat = df_090_flat.drop(['score_mean_Y','score_std_Y','fmin_mean_Y','fmin_std_Y',
+    'multi_mean_Y','multi_std_Y','score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
+df_ver_flat = df_ver_flat.drop(['score_mean_X','score_std_X','fmin_mean_X','fmin_std_X',
+    'multi_mean_X','multi_std_X','score_mean_Y','score_std_Y','fmin_mean_Y','fmin_std_Y',
+    'multi_mean_Y','multi_std_Y'],axis=1)
+df_rotd50_flat = df_rotd50_flat.drop(['score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
+df_rotd100_flat = df_rotd100_flat.drop(['score_mean_Z','score_std_Z','fmin_mean_Z','fmin_std_Z',
+    'multi_mean_Z','multi_std_Z'],axis=1)
 
 ###
 

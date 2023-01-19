@@ -41,7 +41,7 @@ from qcore import nhm, geo
 # Get root directory, output path, and set global variables
 cwd = os.getcwd()
 
-out_path = cwd + '/out'
+out_path = cwd + '/out/relocated'
 if not os.path.exists(out_path):
 	os.makedirs(out_path)
 
@@ -869,7 +869,7 @@ if __name__ == "__main__":
 
     directory = '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/'
     geonet_cmt_df = pd.read_csv(directory+'focal/GeoNet_CMT_solutions.csv',low_memory=False)
-    df = pd.read_csv(directory+'testaroo/earthquake_source_table_relocated.csv',low_memory=False)
+    df = pd.read_csv(directory+'relocated_output/all_events.csv',low_memory=False)
 
     geonet_cmt_df.rename(columns={'PublicID':'evid'},inplace=True)
 
@@ -878,6 +878,7 @@ if __name__ == "__main__":
     df.loc[~df.Mw.isnull(),['mag','lat','lon','depth']] = df.loc[~df.Mw.isnull(),['Mw','Latitude','Longitude','CD']].values
     df.loc[~df.Mw.isnull(),['mag_type','mag_method','loc_type','loc_grid']] = 'Mw','CMT','CMT','CMT'
     df.drop(columns=['Mw','Latitude','Longitude','CD'],inplace=True)
+    df['evid'] = df.evid.astype('object')
 
 #     df = pd.read_csv(
 #         '/Volumes/SeaJade 2 Backup/NZ/NZ_EQ_Catalog/testaroo/for_elena.csv',
@@ -922,7 +923,7 @@ if __name__ == "__main__":
         R_abc = merged_abc,
         )
 
-    pandarallel.initialize(nb_workers=6) # Customize the number of parallel workers
+    pandarallel.initialize(nb_workers=8,progress_bar=True) # Customize the number of parallel workers
 
     df['NGASUB_TectClass_Merged'] = df.parallel_apply(
         lambda x: ngasub2020_tectclass_v3(
@@ -959,7 +960,7 @@ if __name__ == "__main__":
         print(domain_no,domain_name)
         shapes.append(layer)
     wgs2nztm = Transformer.from_crs(4326, 2193, always_xy=True)
-    pandarallel.initialize(nb_workers=4) # Customize the number of parallel workers
+    pandarallel.initialize(nb_workers=8,progress_bar=True) # Customize the number of parallel workers
     merged_df[['domain_no', 'domain_name', 'domain_type']] = merged_df.parallel_apply(lambda x: get_domains(x,shapes,wgs2nztm),axis=1)
     merged_df.drop(columns='domain_name',inplace=True)
 
@@ -1062,7 +1063,7 @@ if __name__ == "__main__":
 #         axis=1)
 
     merged_df.to_csv(
-        out_path + '/earthquake_source_table_relocated_tectdomain.csv',
+        out_path + '/earthquake_source_table_tectdomain.csv',
         mode='w',
         index=False,
         )
